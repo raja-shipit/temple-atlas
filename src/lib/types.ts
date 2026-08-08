@@ -50,11 +50,16 @@ export interface Category {
 // Shape Claude's extraction step must return for a single video (spec 5a —
 // an ARRAY of these per video, not one object, to handle multi-temple videos).
 export interface ExtractedTemple {
-  isTemple: true;
   templeName: string;
   deity: string | null;
   state: string | null;
   district: string | null;
+  // Any place/district names the video itself mentions for this temple,
+  // beyond the structured state/district fields above (e.g. a nearby town,
+  // a landmark). Feeds the geocoding cross-check in spec Section 5 — common
+  // temple names repeat across many towns, so name+state alone isn't always
+  // enough to disambiguate.
+  locationHints: string[];
   categories: {
     name: string;
     isNew: boolean;
@@ -65,5 +70,15 @@ export interface ExtractedTemple {
 
 export interface ExtractionResult {
   videoId: string;
-  temples: ExtractedTemple[]; // empty array for non-temple videos
+  temples: ExtractedTemple[]; // empty array for non-temple videos (interviews, vlogs, shorts, etc.)
+}
+
+// Input to the extraction step — the subset of video metadata Claude needs.
+export interface VideoForExtraction {
+  videoId: string;
+  title: string;
+  description: string;
+  // Playlist titles this video belongs to, if known — her own playlist
+  // naming is one of the signals used for category proposals (spec Section 4).
+  playlistTitles?: string[];
 }
