@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:extraction": "tsx scripts/test-extraction.ts"
+    "test:extraction": "tsx scripts/test-extraction.ts",
+    "test:entity-resolution": "tsx scripts/test-entity-resolution.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.116.0",
