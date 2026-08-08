@@ -2,36 +2,36 @@
 
 Map-based catalog of Hindu temples covered by @thetemplegirl on YouTube. Full product/technical spec lives in the living-doc artifact (`temple-atlas-spec`) — this README covers just what's needed to run and continue this codebase.
 
-## What's scaffolded
+## What's built
 
-- **Next.js app** (App Router, TypeScript, Tailwind) — `src/app`
-- **Supabase schema** — `supabase/migrations/0001_init.sql`, matching spec v3 exactly: `temples`, `categories`, `sync_log`, plus `rename_category_cascade` / `merge_category_cascade` functions so a category rename never drifts out of sync with the denormalized `temples.categories` array (spec 4b)
-- **Public map page** (`src/app/page.tsx` + `src/app/components/TempleMap.tsx`) — MapLibre GL JS + OpenFreeMap hosted vector tiles (resolved decision, spec 3/3a), pulling published temples from Supabase
-- **Admin queue** (`src/app/admin/page.tsx`) — lists pending temples, flags `needs_review` rows, protected by basic auth (`src/middleware.ts`, resolved decision)
-- **Claude extraction step** (spec Section 4 & 5) — `src/lib/extraction-prompt.ts` builds the system/user prompts and the forced tool-use schema; `src/lib/extraction.ts` calls the Anthropic API and returns typed results. Enforces the two easy-to-get-wrong rules from the spec: categories are only assigned when the video's own title/description/playlist explicitly supports them (no inferring circuit membership), and the output is an array so multi-temple and non-temple videos are handled correctly (spec 5a).
+**Ingestion pipeline** (spec Section 5) — every step now implemented in `/api/cron/sync`:
 
-  Try it without touching the database: `npm run test:extraction -- scripts/fixtures/sample-video.json` prints the exact prompts that would be sent. Three fixtures are included — a standard single-temple video, a non-temple vlog (should yield an empty `temples` array), and a multi-temple day-trip video (should yield three). Set `ANTHROPIC_API_KEY` in your shell to also run it live and see the actual parsed output.
+1. **YouTube upload listing** (`src/lib/youtube.ts`) — `playlistItems.list` against the channel's uploads playlist, paginated, stopping at the last-seen `video_id`.
+2. **Claude extraction** (`src/lib/extraction-prompt.ts` + `src/lib/extraction.ts`) — forced tool-use call that returns an array of temples per video (spec 5a), so non-temple videos correctly yield an empty array and compilation videos correctly yield several entries. Categories are only assigned when the video's own title/description/playlist explicitly supports them — the prompt is told not to infer circuit membership (e.g. "this is popularly a Jyotirlinga" when the video never says so).
+   Try it without touching anything else: `npm run test:extraction -- scripts/fixtures/sample-video.json`. Three fixtures are included (single-temple, non-temple vlog, multi-temple compilation). Set `ANTHROPIC_API_KEY` to also run it live.
+3. **Entity resolution** (`src/lib/entity-resolution.ts`, spec 5b) — decides whether a newly extracted temple is the same physical temple as an existing row (append to `additional_sources`) or genuinely new. Conservative by design: a generic shared name ("Durga Mandir") across different states never auto-attaches even at perfect text similarity, since normalizing away generic words can make unrelated places look identical.
+   Try it: `npm run test:entity-resolution` — four scenarios (exact repeat, phrasing variant, same-name-different-state, unrelated temple) with the reasoning printed for each.
+4. **Nominatim geocoding** (`src/lib/geocoding.ts`, resolved decision) — public API, 1 req/sec throttle enforced in-process, identifying `User-Agent` from `NOMINATIM_USER_AGENT`. Cross-checks the result against the extracted `state` and `locationHints`; sets `needs_review: true` rather than silently trusting an ambiguous or state-mismatched result.
+5. **Insert as pending**, with the real geocoded coordinates and `needs_review` flag — done.
+6. **`sync_log`** row per run — done.
 
-- **Entity resolution** (spec 5b) — `src/lib/entity-resolution.ts`. Decides whether a newly extracted temple is the same physical temple as an existing row (attach as an additional source) or genuinely new. Deliberately conservative about the exact failure mode the spec calls out: two temples with a generic shared name ("Durga Mandir") in different states score low even at perfect textual similarity, because normalizing away words like "temple"/"mandir" can make unrelated places look identical — state mismatches are never overridden by name similarity alone. Try it with `npm run test:entity-resolution`, which runs four scenarios (exact repeat, phrasing variant, same-name-different-state, unrelated temple) and prints the match/no-match reasoning for each.
+**Thumbnail refresh** (`/api/cron/refresh-thumbnails`, spec 5c) — finds temples whose cached thumbnail is more than 30 calendar days old (YouTube's Developer Policy limit) and either refreshes it via `videos.list` or nulls it out if the video's gone.
 
-- **Cron route stubs**:
-  - `src/app/api/cron/sync/route.ts` — the daily ingestion pipeline. Extraction (step 2) and entity resolution (step 3) are wired in and functional: a matched temple gets the new video appended to `additional_sources`; an unmatched one gets inserted as a new pending row. YouTube upload listing (step 1) and Nominatim geocoding (step 4) are still TODO — new rows are inserted with `needs_review: true` and no coordinates in the meantime, so nothing reaches the public map without a real location once geocoding exists to check it against.
-  - `src/app/api/cron/refresh-thumbnails/route.ts` — the YouTube 30-day thumbnail refresh job (spec 5c). Currently just counts stale rows.
-  - Both are wired into `vercel.json` on a daily schedule.
-- **PWA basics** — `public/manifest.json`, a minimal `public/sw.js` that caches the app shell for offline/low-connectivity use (spec Section 7), registered in `src/app/layout.tsx`. Icons are solid-color placeholders — swap `public/icons/*.png` before launch.
+**Admin** (`src/app/admin/`, spec Section 6) — pending queue with a map preview and inline edit form per entry, approve (sets `last_verified_at`)/reject actions, a re-verify action on already-published entries, a manual "add temple" form (also where `instagram_urls` gets populated — spec 4a, never touched by the pipeline), and category rename/merge/retire controls. The rename/merge actions call the `rename_category_cascade` / `merge_category_cascade` SQL functions from the migration, not a direct update, so the denormalized `temples.categories` array can never drift out of sync (spec 4b). All server actions live in `src/app/admin/actions.ts`; the route itself is behind basic auth via `src/middleware.ts`.
 
-## What's NOT built yet
+**Public frontend** (`src/app/components/TempleExplorer.tsx` + `TempleMap.tsx`, spec Section 7) — MapLibre GL JS + OpenFreeMap tiles (resolved decision, spec 3a), search, multi-select category filter, state filter, a card list that stays in sync with the same filters and the map, and a trip planner: add/remove/reorder stops, with a straight-line connector drawn on the map — explicitly labeled as a straight line, not driving directions.
 
-This is a scaffold, not a working product. Still to do, roughly in dependency order:
+**Database** — `supabase/migrations/0001_init.sql` matches spec v3 exactly: `temples`, `categories`, `sync_log`, and the two cascade functions mentioned above.
 
-1. **YouTube upload listing** — `playlistItems.list` against the channel's uploads playlist, paginated, stopping at the last-seen `video_id`. Feeds the extraction step below; this is the one remaining piece of the ingestion pipeline's input side.
-2. ~~Extraction prompt~~ — done, see `src/lib/extraction.ts` / `src/lib/extraction-prompt.ts`.
-3. ~~Entity resolution~~ — done, see `src/lib/entity-resolution.ts`.
-4. **Nominatim geocoding client** — respecting their usage policy (1 req/sec, identifying `User-Agent` from `NOMINATIM_USER_AGENT`), cross-checked against each temple's `locationHints` from the extraction step (spec Section 5). Newly inserted temples currently have `needs_review: true` and null coordinates as a placeholder for this.
-5. **Finish `/api/cron/sync`** — extraction and entity resolution are already wired in; plug in steps 1 and 4 around them, and set `needs_review` based on actual geocode confidence instead of unconditionally.
-6. **Fill in `/api/cron/refresh-thumbnails`** with an actual YouTube `videos.list` call.
-7. **Admin UI**: edit form, map preview, approve/reject (approve sets `last_verified_at = now()`, spec Section 6), manual "add temple" form (this is also where `instagram_urls` gets populated, spec 4a), category merge/rename/retire controls that call the SQL cascade functions.
-8. **Public frontend**: search, category filter, state filter, card list synced to map viewport, trip planner (straight-line connector between stops — explicitly not driving directions, spec Section 7).
+**PWA basics** — `public/manifest.json`, a minimal `public/sw.js` caching the app shell for offline/low-connectivity use (spec Section 7 — a meaningful share of this audience will be at rural temple sites with poor signal), registered in `src/app/layout.tsx`. Icons are solid-color placeholders — swap `public/icons/*.png` before launch.
+
+## What's not built / not verified yet
+
+- **Nothing has been run against real credentials.** This sandbox has no network access to the YouTube Data API, the Anthropic API, or Nominatim, so none of steps 1–4 above have been exercised end-to-end against live data — only `tsc --noEmit`, `next build`, and `eslint` have been verified clean, plus the two dry-run scripts (extraction, entity resolution) that don't require external network access. Run a real cron invocation against a test Supabase project before trusting this in production.
+- **Playlist membership** isn't fetched during YouTube listing (`src/lib/youtube.ts` — `playlistTitles` is always `[]`). The extraction prompt still works off title/description alone; wire in a `playlists.list` walk later if category proposals prove too weak without it.
+- **`lastSeenVideoId` tracking** is inferred from the most recently created temple row rather than stored explicitly in `sync_log` — fine at ~1 video/week, but worth hardening (e.g. a dedicated `last_synced_video_id` column) before running a large backfill.
+- **Category marker colors on the map** — `categories.color` exists in the schema but nothing sets or reads it yet; every marker is currently one fixed color.
+- **"Last verified" data won't exist until the admin approve flow is actually used** against a real database — the field and UI are wired, there's just nothing to show without real approvals.
 
 ## Local setup
 

@@ -12,10 +12,21 @@ import type { Temple } from "@/lib/types";
 const OPENFREEMAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
 const INDIA_CENTER: [number, number] = [78.9629, 22.5937];
 const INDIA_ZOOM = 4.2;
+const TRIP_LINE_SOURCE_ID = "trip-plan-line";
+const TRIP_LINE_LAYER_ID = "trip-plan-line-layer";
 
-export default function TempleMap({ temples }: { temples: Temple[] }) {
+interface TempleMapProps {
+  temples: Temple[];
+  // Ordered trip-plan stops, drawn as a straight-line connector — spec
+  // Section 7 is explicit that this must not be presented as turn-by-turn
+  // driving directions, just a simple line between selected stops in order.
+  tripPlanCoords?: [number, number][];
+}
+
+export default function TempleMap({ temples, tripPlanCoords }: TempleMapProps) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
+  const mapLoadedRef = useRef(false);
 
   useEffect(() => {
     if (!mapContainer.current || mapRef.current) return;
@@ -28,9 +39,28 @@ export default function TempleMap({ temples }: { temples: Temple[] }) {
     });
     mapRef.current = map;
 
+    map.on("load", () => {
+      mapLoadedRef.current = true;
+      map.addSource(TRIP_LINE_SOURCE_ID, {
+        type: "geojson",
+        data: emptyLineFeature(),
+      });
+      map.addLayer({
+        id: TRIP_LINE_LAYER_ID,
+        type: "line",
+        source: TRIP_LINE_SOURCE_ID,
+        paint: {
+          "line-color": "#0369a1",
+          "line-width": 2,
+          "line-dasharray": [2, 1.5],
+        },
+      });
+    });
+
     return () => {
       map.remove();
       mapRef.current = null;
+      mapLoadedRef.current = false;
     };
   }, []);
 
@@ -70,5 +100,40 @@ export default function TempleMap({ temples }: { temples: Temple[] }) {
     };
   }, [temples]);
 
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    function updateLine() {
+      const source = map!.getSource(TRIP_LINE_SOURCE_ID) as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      if (!source) return;
+      source.setData(
+        tripPlanCoords && tripPlanCoords.length >= 2
+          ? {
+              type: "Feature",
+              properties: {},
+              geometry: { type: "LineString", coordinates: tripPlanCoords },
+            }
+          : emptyLineFeature()
+      );
+    }
+
+    if (mapLoadedRef.current) {
+      updateLine();
+    } else {
+      map.once("load", updateLine);
+    }
+  }, [tripPlanCoords]);
+
   return <div ref={mapContainer} className="w-full h-full min-h-[500px]" />;
+}
+
+function emptyLineFeature(): GeoJSON.Feature<GeoJSON.LineString> {
+  return {
+    type: "Feature",
+    properties: {},
+    geometry: { type: "LineString", coordinates: [] },
+  };
 }
