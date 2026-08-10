@@ -5,7 +5,7 @@ import { resolveTempleEntity } from "@/lib/entity-resolution";
 import { listNewUploads, fetchThumbnails } from "@/lib/youtube";
 import { geocodeTemple } from "@/lib/geocoding";
 import type { AdditionalSource, Category, Temple } from "@/lib/types";
-
+export const maxDuration = 60;
 // Vercel Cron target — see spec Section 3 (data flow) and Section 5
 // (ingestion pipeline detail). Runs daily. Full pipeline, all steps now
 // implemented:
